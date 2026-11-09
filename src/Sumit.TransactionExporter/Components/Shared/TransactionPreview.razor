@@ -1,0 +1,37 @@
+@using System.Globalization
+
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th class="amount">Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var transaction in Transactions.Take(MaxRows))
+            {
+                <tr>
+                    <td>@transaction.Date.ToString("dd MMM yyyy", CultureInfo.InvariantCulture)</td>
+                    <td class="description"><bdi>@transaction.Description</bdi></td>
+                    <td class="amount @(transaction.Amount < 0 ? "out" : "in")">
+                        @transaction.Amount.ToString("+#,##0.00;-#,##0.00;0.00", CultureInfo.InvariantCulture)
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@if (Transactions.Count > MaxRows)
+{
+    <p class="muted small">Showing the first @MaxRows of @Transactions.Count transactions. The export contains all of them.</p>
+}
+
+@code {
+    private const int MaxRows = 10;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<Transaction> Transactions { get; set; } = [];
+}

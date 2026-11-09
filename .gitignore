@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+*.user
+.vs/
+.vscode/
+.idea/
+TestResults/
+
+# Exported transactions and anything else that may contain financial data
+*.json.export
+exports/
+transactions*.json
+
+# Browser automation artifacts (may contain personal data)
+playwright-report/
+test-results/
+traces/
+*.trace.zip
+*.har
+*.png
+*.jpg
+*.webm
+browser-profile*/
+storage-state*.json
+
+# Local secrets
+appsettings.*.local.json
+.env

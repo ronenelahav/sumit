@@ -1,0 +1,275 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@using System.Globalization
+@inject TransactionExportService ExportService
+@inject IJSRuntime JS
+@inject ILogger<Transactions> Logger
+
+<PageTitle>Export transactions</PageTitle>
+
+<h1>Export transactions</h1>
+<p class="lead">
+    Retrieve last month's transactions from your bank or card provider and download them as a JSON file.
+    You sign in on the provider's own website; this app never sees or stores your credentials.
+</p>
+
+<section class="panel">
+    <h2>1. Choose a provider</h2>
+    <ProviderSelector Providers="_providers" Selected="_selected" SelectedChanged="SelectProvider" Disabled="IsBusy" />
+
+    @if (_selected is not null)
+    {
+        <div class="notice notice-info small">
+            <strong>@_selected.DisplayName is a live integration.</strong>
+            The browser window opens @(_selected.DisplayName)'s real website. Sign in there yourself, including any SMS code;
+            your credentials go only to @_selected.DisplayName. Transactions are read once you are signed in.
+        </div>
+    }
+</section>
+
+<section class="panel">
+    <h2>2. Period</h2>
+    <div class="period">
+        <strong>@FormatDate(_period.Start) – @FormatDate(_period.LastDay)</strong>
+        <span class="muted">Previous calendar month</span>
+    </div>
+    @if (_selected?.Kind == ProviderKind.CreditCard)
+    {
+        <p class="muted small">
+            Card transactions are selected by purchase date, not by billing cycle. A later installment of a purchase
+            is dated in the month it is allocated to, so each installment is counted once.
+        </p>
+    }
+</section>
+
+<section class="panel">
+    <h2>3. Connect and retrieve</h2>
+    <p class="muted small">
+        A browser window opens on this computer. Sign in there and complete any verification step.
+        The window closes automatically once the transactions are retrieved.
+    </p>
+
+    <div class="actions">
+        <button class="btn btn-primary" disabled="@(_selected is null || IsBusy)" @onclick="ConnectAsync">
+            @(_selected is null ? "Choose a provider first" : $"Connect to {_selected.DisplayName}")
+        </button>
+        @if (IsRunning)
+        {
+            <button class="btn btn-secondary" @onclick="Cancel">Cancel</button>
+        }
+    </div>
+
+    @if (_stage != ExtractionStage.Ready)
+    {
+        <div class="progress-block">
+            <ExtractionProgress Stage="_lastStep" IsRunning="IsRunning" Stopped="@(_stage is ExtractionStage.Failed or ExtractionStage.Cancelled)" />
+        </div>
+    }
+
+    @if (_stage == ExtractionStage.Cancelled)
+    {
+        <div class="notice notice-warning small" role="status">Cancelled. The browser window was closed and no transactions were retrieved.</div>
+    }
+
+    @if (_errorMessage is not null)
+    {
+        <div class="notice notice-error small" role="alert">@_errorMessage</div>
+    }
+</section>
+
+@if (_result is not null)
+{
+    <section class="panel">
+        <h2>4. Review and export</h2>
+        <div class="summary">
+            <div>
+                <span class="muted small">Transactions</span>
+                <span class="value">@_result.Transactions.Count</span>
+            </div>
+            <div>
+                <span class="muted small">Period</span>
+                <span class="value">@FormatDate(_result.Period.Start) – @FormatDate(_result.Period.LastDay)</span>
+            </div>
+        </div>
+
+        @if (_result.ExcludedOutsidePeriod > 0)
+        {
+            <p class="muted small">
+                @(_result.ExcludedOutsidePeriod == 1
+                    ? "1 transaction outside this period was returned by the provider and left out."
+                    : $"{_result.ExcludedOutsidePeriod} transactions outside this period were returned by the provider and left out.")
+            </p>
+        }
+
+        @if (_result.Transactions.Count == 0)
+        {
+            <p>The provider reported no transactions for this period. You can still export an empty file.</p>
+        }
+        else
+        {
+            <p class="muted small">Long card and account numbers are masked in the preview and in the export.</p>
+            <TransactionPreview Transactions="_result.Transactions" />
+        }
+
+        <div class="actions">
+            <button class="btn btn-primary" disabled="@_isExporting" @onclick="DownloadAsync">Download JSON</button>
+            <button class="btn btn-secondary" disabled="@_isExporting" @onclick="StartOver">Start over</button>
+        </div>
+
+        @if (_stage == ExtractionStage.Completed)
+        {
+            <p class="muted small" role="status">Saved @TransactionExportService.GetExportFileName(_result) to your downloads.</p>
+        }
+    </section>
+}
+
+@code {
+    private IReadOnlyList<ProviderInfo> _providers = [];
+    private ProviderInfo? _selected;
+    private DateRange _period = null!;
+
+    private ExtractionStage _stage = ExtractionStage.Ready;
+    private ExtractionStage _lastStep = ExtractionStage.Ready;
+    private ExtractionResult? _result;
+    private string? _errorMessage;
+    private bool _isExporting;
+
+    // Non-null while an extraction runs. Handlers of one circuit never run in parallel, but another
+    // click can be handled while ConnectAsync awaits. The guard works because ConnectAsync checks and
+    // sets this field before its first await, so that later click sees IsRunning and returns.
+    private CancellationTokenSource? _cancellation;
+
+    private bool IsRunning => _cancellation is not null;
+
+    // Starting over, switching provider or connecting during a download would let the finishing
+    // download overwrite the new state.
+    private bool IsBusy => IsRunning || _isExporting;
+
+    protected override void OnInitialized()
+    {
+        _providers = ExportService.Providers;
+        _period = ExportService.GetDefaultPeriod();
+    }
+
+    private void SelectProvider(ProviderInfo provider)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        _selected = provider;
+        Reset();
+    }
+
+    private async Task ConnectAsync()
+    {
+        if (_selected is null || IsBusy)
+        {
+            return;
+        }
+
+        Reset();
+        _cancellation = new CancellationTokenSource();
+        try
+        {
+            _result = await ExportService.ExtractAsync(
+                _selected.Provider, _period, new StageProgress(this, _cancellation.Token), _cancellation.Token);
+            _stage = _lastStep = ExtractionStage.ReadyForExport;
+        }
+        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        {
+            _stage = ExtractionStage.Cancelled;
+        }
+        catch (ExtractionException ex)
+        {
+            _stage = ExtractionStage.Failed;
+            _errorMessage = ex.Message;
+        }
+        catch (Exception)
+        {
+            // Logged by TransactionExportService.
+            _stage = ExtractionStage.Failed;
+            _errorMessage = "Something went wrong and no transactions were retrieved. Please try again.";
+        }
+        finally
+        {
+            _cancellation.Dispose();
+            _cancellation = null;
+        }
+    }
+
+    private void Cancel() => _cancellation?.Cancel();
+
+    private async Task DownloadAsync()
+    {
+        var result = _result;
+        if (result is null || IsBusy)
+        {
+            return;
+        }
+
+        _isExporting = true;
+        _errorMessage = null;
+        try
+        {
+            // The file is built in memory and streamed straight to the browser; nothing is written to disk.
+            using var stream = new MemoryStream();
+            await ExportService.ExportAsync(result, stream, CancellationToken.None);
+            stream.Position = 0;
+
+            using var streamReference = new DotNetStreamReference(stream);
+            await JS.InvokeVoidAsync(
+                "downloadFileFromStream", TransactionExportService.GetExportFileName(result), "application/json", streamReference);
+            _stage = _lastStep = ExtractionStage.Completed;
+        }
+        catch (Exception ex) when (ex is JSException or IOException or TaskCanceledException)
+        {
+            Logger.LogWarning("Export download failed: {ErrorType}", ex.GetType().Name);
+            _errorMessage = "The JSON file could not be downloaded. Please try again.";
+        }
+        finally
+        {
+            _isExporting = false;
+        }
+    }
+
+    private void StartOver()
+    {
+        if (!IsBusy)
+        {
+            Reset();
+        }
+    }
+
+    private void Reset()
+    {
+        _result = null;
+        _errorMessage = null;
+        _stage = _lastStep = ExtractionStage.Ready;
+    }
+
+    private static string FormatDate(DateOnly date) => date.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+
+    // Cancels a running extraction when the circuit ends. ConnectAsync still unwinds, and the browser
+    // session is disposed by BrowserTransactionSource.
+    public void Dispose() => _cancellation?.Cancel();
+
+    // Reports arrive on the circuit's synchronization context because the workflow awaits without
+    // ConfigureAwait(false), so the state can be updated and rendered directly. Reports made after
+    // Cancel or after the page was disposed (which also cancels) are ignored.
+    private sealed class StageProgress(Transactions page, CancellationToken cancellation) : IProgress<ExtractionStage>
+    {
+        public void Report(ExtractionStage value)
+        {
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            page._stage = page._lastStep = value;
+            page.StateHasChanged();
+        }
+    }
+}

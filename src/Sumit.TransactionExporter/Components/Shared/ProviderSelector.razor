@@ -1,0 +1,30 @@
+<fieldset class="provider-grid" disabled="@Disabled">
+    <legend class="visually-hidden">Financial provider</legend>
+    @foreach (var provider in Providers)
+    {
+        var isSelected = provider.Provider == Selected?.Provider;
+        <label class="provider-option @(isSelected ? "selected" : "") @(Disabled ? "disabled" : "")">
+            <input type="radio"
+                   name="provider"
+                   checked="@isSelected"
+                   disabled="@Disabled"
+                   @onchange="() => SelectedChanged.InvokeAsync(provider)" />
+            <span class="provider-name">@provider.DisplayName</span>
+            <span class="badge badge-live">Live · real website</span>
+        </label>
+    }
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<ProviderInfo> Providers { get; set; } = [];
+
+    [Parameter]
+    public ProviderInfo? Selected { get; set; }
+
+    [Parameter]
+    public EventCallback<ProviderInfo> SelectedChanged { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+}

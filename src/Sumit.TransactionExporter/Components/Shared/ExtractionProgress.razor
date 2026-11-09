@@ -1,0 +1,52 @@
+<ol class="steps" aria-live="polite">
+    @foreach (var step in Steps)
+    {
+        <li class="step @CssClass(step)">@Label(step)</li>
+    }
+</ol>
+
+@code {
+    private static readonly ExtractionStage[] Steps =
+    [
+        ExtractionStage.OpeningBrowser,
+        ExtractionStage.WaitingForAuthentication,
+        ExtractionStage.Authenticated,
+        ExtractionStage.RetrievingTransactions,
+        ExtractionStage.ProcessingTransactions,
+        ExtractionStage.ReadyForExport,
+        ExtractionStage.Completed,
+    ];
+
+    /// <summary>The last step reached.</summary>
+    [Parameter, EditorRequired]
+    public ExtractionStage Stage { get; set; }
+
+    [Parameter]
+    public bool IsRunning { get; set; }
+
+    /// <summary>True when the run failed or was cancelled at <see cref="Stage"/>.</summary>
+    [Parameter]
+    public bool Stopped { get; set; }
+
+    private string CssClass(ExtractionStage step) =>
+        step < Stage ? "done"
+        : step > Stage ? ""
+        : IsRunning ? (step == ExtractionStage.WaitingForAuthentication ? "current waiting" : "current")
+        : Stopped ? "stopped"
+        : "done";
+
+    public static string Label(ExtractionStage stage) => stage switch
+    {
+        ExtractionStage.Ready => "Ready",
+        ExtractionStage.OpeningBrowser => "Opening browser",
+        ExtractionStage.WaitingForAuthentication => "Waiting for you to sign in",
+        ExtractionStage.Authenticated => "Signed in",
+        ExtractionStage.RetrievingTransactions => "Retrieving transactions",
+        ExtractionStage.ProcessingTransactions => "Processing transactions",
+        ExtractionStage.ReadyForExport => "Ready for export",
+        ExtractionStage.Completed => "Exported",
+        ExtractionStage.Failed => "Failed",
+        ExtractionStage.Cancelled => "Cancelled",
+        _ => stage.ToString(),
+    };
+}
